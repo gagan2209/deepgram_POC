@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Audio Recorder with WebCodecs &amp; WebSocket</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2em;
+      }
+      button {
+        font-size: 1em;
+        margin-right: 1em;
+        padding: 0.5em 1em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Audio Recorder</h1>
+    <button id="startButton">Start Recording</button>
+    <button id="stopButton" disabled>Stop Recording</button>
+
+    <script>
+      // Global variables to manage audio and websocket state.
+      let audioContext;
+      let mediaStream;
+      let audioWorkletNode;
+      let ws;
+      let timerId;
+      let pcmBuffer = []; // will accumulate Float32Array chunks
+
+      // Start recording: opens WS, gets audio, and sets up worklet processing.
+      async function startRecording() {
+        // Update button states
+        document.getElementById("startButton").disabled = true;
+        document.getElementById("stopButton").disabled = false;
+
+        // Open WebSocket connection to ws://localhost:8000/ws
+        ws = new WebSocket("ws://localhost:8000/ws");
+        ws.binaryType = "arraybuffer";
+        ws.onopen = () => {
+          console.log("WebSocket connection opened.");
+        };
+        ws.onerror = (err) => {
+          console.error("WebSocket error:", err);
+        };
+        ws.onclose = () => {
+          console.log("WebSocket closed.");
+        };
+
+        // Request access to the microphone
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          console.error("Error accessing microphone:", err);
+          return;
+        }
+
+        // Create an AudioContext for audio processing
+        audioContext = new AudioContext();
+
+        // Load an inline AudioWorklet module that will capture PCM data.
+        try {
+          // Define the AudioWorkletProcessor as a string.
+          const workletCode = `
+            class PCMProcessor extends AudioWorkletProcessor {
+              constructor() {
+                super();
+              }
+              process(inputs, outputs, parameters) {
+                // 'inputs' is an array of inputs; we assume the first input and its first channel.
+                if (inputs.length > 0 && inputs[0].length > 0) {
+                  // Send the Float32Array of PCM samples from the first channel to the main thread.
+                  this.port.postMessage(inputs[0][0]);
+                }
+                return true;
+              }
+            }
+            registerProcessor('pcm-processor', PCMProcessor);
+          `;
+          const blob = new Blob([workletCode], { type: "application/javascript" });
+          const blobURL = URL.createObjectURL(blob);
+          await audioContext.audioWorklet.addModule(blobURL);
+        } catch (err) {
+          console.error("Error loading AudioWorklet module:", err);
+          return;
+        }
+
+        // Create a MediaStreamAudioSourceNode from the microphone stream.
+        const sourceNode = audioContext.createMediaStreamSource(mediaStream);
+
+        // Create an AudioWorkletNode that uses our 'pcm-processor'
+        audioWorkletNode = new AudioWorkletNode(audioContext, "pcm-processor");
+
+        // Listen for messages (raw PCM chunks) from the AudioWorklet.
+        audioWorkletNode.port.onmessage = (event) => {
+          // Each message is a Float32Array of PCM samples (assumed mono).
+          pcmBuffer.push(event.data);
+        };
+
+        // Connect the source node to the worklet node.
+        sourceNode.connect(audioWorkletNode);
+        // (We do not connect to destination to avoid playback feedback)
+
+        // Every 300ms, combine accumulated PCM chunks and send them over the WebSocket.
+        timerId = setInterval(() => {
+          if (pcmBuffer.length > 0 && ws.readyState === WebSocket.OPEN) {
+            // Determine total number of samples
+            const totalSamples = pcmBuffer.reduce((sum, arr) => sum + arr.length, 0);
+            // Create a combined Float32Array.
+            const combined = new Float32Array(totalSamples);
+            let offset = 0;
+            for (const chunk of pcmBuffer) {
+              combined.set(chunk, offset);
+              offset += chunk.length;
+            }
+
+            // --- Using WebCodecs API ---
+            // For demonstration, we wrap the raw PCM in an AudioData object.
+            // Note: AudioData is part of the WebCodecs API.
+            if ("AudioData" in window) {
+              try {
+                const audioData = new AudioData({
+                  timestamp: performance.now() * 1000, // in microseconds
+                  data: combined.buffer,
+                  numberOfFrames: combined.length, // since we're using one channel
+                  numberOfChannels: 1,
+                  sampleRate: audioContext.sampleRate,
+                  format: "f32"
+                });
+                // Here you could inspect audioData or use it for further processing.
+                // For our purposes, we simply send the raw PCM buffer.
+              } catch (e) {
+                console.error("Error creating AudioData:", e);
+              }
+            }
+            // --- End WebCodecs demo ---
+
+            // Send the raw PCM data (as an ArrayBuffer) over the WebSocket.
+            ws.send(combined.buffer);
+
+            // Clear the pcmBuffer for the next 300ms interval.
+            pcmBuffer = [];
+          }
+        }, 300);
+      }
+
+      // Stop recording: closes the WS and stops the audio processing.
+      function stopRecording() {
+        // Update button states
+        document.getElementById("startButton").disabled = false;
+        document.getElementById("stopButton").disabled = true;
+
+        // Stop the periodic sending
+        if (timerId) {
+          clearInterval(timerId);
+          timerId = null;
+        }
+
+        // Disconnect audio nodes and close the audio context.
+        if (audioWorkletNode) {
+          audioWorkletNode.disconnect();
+        }
+        if (audioContext) {
+          audioContext.close();
+        }
+        // Stop all tracks from the media stream.
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((track) => track.stop());
+        }
+        // Close the WebSocket connection if it is still open.
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+      }
+
+      // Attach event listeners to the buttons.
+      document.getElementById("startButton").addEventListener("click", startRecording);
+      document.getElementById("stopButton").addEventListener("click", stopRecording);
+    </script>
+  </body>
+</html>

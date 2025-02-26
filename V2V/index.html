@@ -1,0 +1,301 @@
+<!--<!DOCTYPE html>-->
+<!--<html lang="en">-->
+<!--<head>-->
+<!--  <meta charset="UTF-8" />-->
+<!--  <meta name="viewport" content="width=device-width, initial-scale=1.0" />-->
+<!--  <title>Live Audio Streaming with TTS</title>-->
+<!--</head>-->
+<!--<body>-->
+<!--  <h2>Live Audio Streaming & TTS</h2>-->
+<!--  <button id="start">Start Recording</button>-->
+<!--  <button id="stop" disabled>Stop Recording</button>-->
+<!--  <button id="playTTS">Play Synthesized Audio</button>-->
+<!--  <p id="log"></p>-->
+
+<!--  <script>-->
+<!--    let streamSocket;-->
+<!--    let audioContext;-->
+<!--    let mediaStream;-->
+<!--    let processor;-->
+
+<!--    // Helper function to resample a Float32Array buffer to 16kHz-->
+<!--    async function resampleBuffer(buffer, inputSampleRate, targetSampleRate) {-->
+<!--      const targetLength = Math.ceil(buffer.length * targetSampleRate / inputSampleRate);-->
+<!--      const offlineContext = new OfflineAudioContext(1, targetLength, targetSampleRate);-->
+<!--      const audioBuffer = offlineContext.createBuffer(1, buffer.length, inputSampleRate);-->
+<!--      audioBuffer.copyToChannel(buffer, 0, 0);-->
+<!--      const source = offlineContext.createBufferSource();-->
+<!--      source.buffer = audioBuffer;-->
+<!--      source.connect(offlineContext.destination);-->
+<!--      source.start(0);-->
+<!--      const renderedBuffer = await offlineContext.startRendering();-->
+<!--      return renderedBuffer.getChannelData(0);-->
+<!--    }-->
+
+<!--    // Start recording and send audio to transcription WebSocket (port 8000)-->
+<!--    document.getElementById("start").addEventListener("click", async () => {-->
+<!--      streamSocket = new WebSocket("ws://localhost:8000/ws");-->
+<!--      streamSocket.binaryType = "arraybuffer";-->
+<!--      streamSocket.onopen = () => console.log("Audio stream WebSocket connected");-->
+<!--      streamSocket.onerror = (error) => console.error("Stream WebSocket Error:", error);-->
+<!--      streamSocket.onclose = () => console.log("Stream WebSocket closed");-->
+
+<!--      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });-->
+<!--      audioContext = new (window.AudioContext || window.webkitAudioContext)();-->
+<!--      const source = audioContext.createMediaStreamSource(mediaStream);-->
+<!--      processor = audioContext.createScriptProcessor(4096, 1, 1);-->
+
+<!--      processor.onaudioprocess = async (event) => {-->
+<!--        const inputData = event.inputBuffer.getChannelData(0);-->
+<!--        const inputSampleRate = audioContext.sampleRate;-->
+<!--        const targetSampleRate = 16000;-->
+<!--        let resampledData = inputData;-->
+<!--        if (inputSampleRate !== targetSampleRate) {-->
+<!--          resampledData = await resampleBuffer(inputData, inputSampleRate, targetSampleRate);-->
+<!--        }-->
+<!--        const int16Buffer = new Int16Array(resampledData.length);-->
+<!--        for (let i = 0; i < resampledData.length; i++) {-->
+<!--          let s = Math.max(-1, Math.min(1, resampledData[i]));-->
+<!--          int16Buffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;-->
+<!--        }-->
+<!--        if (streamSocket && streamSocket.readyState === WebSocket.OPEN) {-->
+<!--          streamSocket.send(int16Buffer.buffer);-->
+<!--          document.getElementById("log").innerText = `Sent ${int16Buffer.byteLength} bytes to backend.`;-->
+<!--        }-->
+<!--      };-->
+
+<!--      source.connect(processor);-->
+<!--      processor.connect(audioContext.destination);-->
+
+<!--      document.getElementById("start").disabled = true;-->
+<!--      document.getElementById("stop").disabled = false;-->
+<!--    });-->
+
+<!--    document.getElementById("stop").addEventListener("click", () => {-->
+<!--      if (processor) processor.disconnect();-->
+<!--      if (audioContext) audioContext.close();-->
+<!--      if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());-->
+<!--      if (streamSocket) streamSocket.close();-->
+<!--      document.getElementById("start").disabled = false;-->
+<!--      document.getElementById("stop").disabled = true;-->
+<!--    });-->
+
+<!--    // TTS Playback: Connect to the TTS WebSocket (port 8001) and play received audio-->
+<!--    document.getElementById("playTTS").addEventListener("click", () => {-->
+<!--      const ttsSocket = new WebSocket("ws://localhost:8000/ws");-->
+<!--      ttsSocket.binaryType = "arraybuffer";-->
+<!--      ttsSocket.onopen = () => console.log("TTS WebSocket connected");-->
+<!--      ttsSocket.onerror = (error) => console.error("TTS WebSocket Error:", error);-->
+<!--      ttsSocket.onclose = () => console.log("TTS WebSocket closed");-->
+
+<!--      // When audio data is received, decode and play it using the Web Audio API.-->
+<!--      ttsSocket.onmessage = async (event) => {-->
+<!--        const audioData = event.data;-->
+<!--        const context = new (window.AudioContext || window.webkitAudioContext)();-->
+<!--        try {-->
+<!--          // Assuming the audio is raw PCM (16-bit, 16kHz, mono) that we can convert into a Float32Array.-->
+<!--          // Create an ArrayBuffer view on the raw data.-->
+<!--          const int16Data = new Int16Array(audioData);-->
+<!--          // Normalize to float [-1, 1]-->
+<!--          let float32Data = new Float32Array(int16Data.length);-->
+<!--          for (let i = 0; i < int16Data.length; i++) {-->
+<!--            float32Data[i] = int16Data[i] / 0x7FFF;-->
+<!--          }-->
+<!--          // Create an AudioBuffer (mono)-->
+<!--          const audioBuffer = context.createBuffer(1, float32Data.length, 16000);-->
+<!--          audioBuffer.copyToChannel(float32Data, 0, 0);-->
+<!--          // Play the buffer-->
+<!--          const source = context.createBufferSource();-->
+<!--          source.buffer = audioBuffer;-->
+<!--          source.connect(context.destination);-->
+<!--          source.start();-->
+<!--        } catch (err) {-->
+<!--          console.error("Error decoding or playing TTS audio:", err);-->
+<!--        }-->
+<!--      };-->
+<!--    });-->
+<!--  </script>-->
+<!--</body>-->
+<!--</html>-->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Audio Streaming Test</title>
+  <style>
+    button {
+      margin: 0.5rem;
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h2>Audio Streaming Test</h2>
+  <button id="startBtn">Start Recording</button>
+  <button id="stopBtn" disabled>Stop Recording</button>
+  <button id="playBtn" disabled>Play Audio</button>
+
+  <script>
+    // Global variables
+    let websocket = null;
+    let audioContext = null;
+    let processor = null;
+    let micInput = null;
+    let micStream = null;
+    let ttsAudioChunks = []; // To store Linear16 PCM audio (raw bytes) received from backend
+
+    /**
+     * Initialize a single WebSocket for both sending raw audio bytes and receiving Linear16 PCM audio.
+     */
+    function initWebSocket() {
+      // Update the URL as needed for your FastAPI endpoint.
+      websocket = new WebSocket("ws://localhost:8000/ws");
+      websocket.binaryType = "arraybuffer";
+
+      websocket.onopen = () => {
+        console.log("WebSocket connection opened.");
+      };
+
+      websocket.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          // Received text message (e.g., transcription or status)
+          console.log("Received text:", event.data);
+        } else {
+          // Received binary data: assume it's Linear16 PCM audio from backend.
+          console.log("Received an audio chunk from backend.");
+          ttsAudioChunks.push(event.data);
+          document.getElementById("playBtn").disabled = false;
+        }
+      };
+
+      websocket.onerror = (err) => {
+        console.error("WebSocket error:", err);
+      };
+
+      websocket.onclose = () => {
+        console.log("WebSocket connection closed.");
+      };
+    }
+
+    /**
+     * Start capturing audio from the microphone.
+     * The raw audio (32-bit float samples) is sent directly to the backend.
+     */
+    async function startRecording() {
+      // Disable start button and enable stop button.
+      document.getElementById("startBtn").disabled = true;
+      document.getElementById("stopBtn").disabled = false;
+      // Clear previous TTS audio.
+      ttsAudioChunks = [];
+      document.getElementById("playBtn").disabled = true;
+
+      // Initialize the WebSocket if not already open.
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+        initWebSocket();
+      }
+
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        return;
+      }
+
+      // Create an AudioContext using the default sample rate.
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const currentSampleRate = audioContext.sampleRate;
+      console.log("Recording sample rate:", currentSampleRate);
+
+      // Calculate buffer size for ~20ms chunks.
+      const bufferSize = Math.round(currentSampleRate * 0.02);
+
+      micInput = audioContext.createMediaStreamSource(micStream);
+
+      // Create a ScriptProcessorNode with the computed buffer size.
+      processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+      processor.onaudioprocess = (e) => {
+        // Get raw 32-bit float samples.
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Make a copy to ensure we send only the current chunk.
+        const rawChunk = inputData.slice();
+        // Send the raw audio bytes directly to the backend.
+        if (websocket && websocket.readyState === WebSocket.OPEN) {
+          websocket.send(rawChunk.buffer);
+        }
+      };
+
+      // Connect nodes.
+      micInput.connect(processor);
+      processor.connect(audioContext.destination);
+    }
+
+    /**
+     * Stop capturing audio and notify the backend if needed.
+     */
+    function stopRecording() {
+      document.getElementById("startBtn").disabled = false;
+      document.getElementById("stopBtn").disabled = true;
+
+      if (processor) {
+        processor.disconnect();
+        processor.onaudioprocess = null;
+      }
+      if (micInput) {
+        micInput.disconnect();
+      }
+      if (micStream) {
+        micStream.getTracks().forEach((track) => track.stop());
+      }
+
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({ event: "end_of_audio" }));
+      }
+    }
+
+    /**
+     * Play the Linear16 PCM audio received from the backend.
+     * The code converts 16-bit PCM to Float32 format for playback.
+     */
+    async function playReceivedAudio() {
+      if (ttsAudioChunks.length === 0) return;
+
+      // Concatenate received ArrayBuffer chunks.
+      const totalLength = ttsAudioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of ttsAudioChunks) {
+        combined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
+
+      // Convert raw 16-bit PCM data to Float32 for playback.
+      const int16View = new Int16Array(combined.buffer);
+      const float32Data = new Float32Array(int16View.length);
+      for (let i = 0; i < int16View.length; i++) {
+        // Note: dividing by 32768 converts the 16-bit PCM value to the [-1, 1] range.
+        float32Data[i] = int16View[i] / 32768;
+      }
+
+      // Create a new AudioContext for playback at 24000 Hz (or your desired sample rate).
+      const playbackContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      const audioBuffer = playbackContext.createBuffer(1, float32Data.length, 24000);
+      audioBuffer.copyToChannel(float32Data, 0);
+
+      const source = playbackContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(playbackContext.destination);
+      source.start();
+
+      console.log("Playing TTS audio.");
+    }
+
+    // Attach button event listeners.
+    document.getElementById("startBtn").addEventListener("click", startRecording);
+    document.getElementById("stopBtn").addEventListener("click", stopRecording);
+    document.getElementById("playBtn").addEventListener("click", playReceivedAudio);
+  </script>
+</body>
+</html>
