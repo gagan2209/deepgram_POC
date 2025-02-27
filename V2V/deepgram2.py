@@ -269,6 +269,3 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     uvicorn.run("deepgram2:app", host="0.0.0.0", port=8000, reload=True)
-
-
-glpat-gzgmvjfSMh5AR3Pm6ZoH
